@@ -104,6 +104,10 @@
         
         <label for="far">Far Clip: <span id="valFar" class="slider-value">10.0</span></label>
         <input type="range" id="far" min="0" max="10" step="0.1" value="10">
+
+        <!-- New Point Size Slider -->
+        <label for="pointSize">Point Size: <span id="valPointSize" class="slider-value">0.020</span></label>
+        <input type="range" id="pointSize" min="0.001" max="0.1" step="0.001" value="0.02">
     </div>
 
     <!-- Hydra Setup Code Editor (Runs Once) -->
@@ -164,6 +168,9 @@ const controlPanel = document.getElementById('controlPanel');
 const setupEditor = document.getElementById('hydraSetupCode');
 const outputEditor = document.getElementById('hydraOutputCode');
 let hydra;
+
+// Global variable to hold all THREE.Points meshes for dynamic size update
+let globalPointsMeshes = [];
 
 function executeHydraCode(code) {
     try {
@@ -233,6 +240,7 @@ function saveCameraSettings() {
         x: pos.x, y: pos.y, z: pos.z,
         rotX: rot.x, rotY: rot.y, rotZ: rot.z,
         fov: cam.fov, near: cam.near, far: cam.far,
+        pointSize: parseFloat(document.getElementById('pointSize').value), // Save point size
         hydraSetupCode: setupEditor.value, // Save setup code
         hydraOutputCode: outputEditor.value // Save output code
     };
@@ -279,6 +287,7 @@ AFRAME.registerComponent('projector-controls', {
             'fov': document.getElementById('fov'),
             'near': document.getElementById('near'),
             'far': document.getElementById('far'),
+            'pointSize': document.getElementById('pointSize'), // New slider reference
         };
         this.updateAframe = this.updateAframe.bind(this);
         
@@ -308,10 +317,13 @@ AFRAME.registerComponent('projector-controls', {
                 z: settings.rotZ
             });
             
-            // 3. Load Projection
+            // 3. Load Projection & Point Size
             this.setSliderAndEntity('fov', settings.fov);
             this.setSliderAndEntity('near', settings.near);
             this.setSliderAndEntity('far', settings.far);
+            if (settings.pointSize !== undefined) {
+                this.setSliderAndEntity('pointSize', settings.pointSize);
+            }
 
             // 4. Load Hydra Code
             if (settings.hydraSetupCode) {
@@ -344,6 +356,7 @@ AFRAME.registerComponent('projector-controls', {
     syncSlidersFromEntity: function() {
         const pos = this.cameraRig.getAttribute('position');
         const cam = this.cameraEl.getAttribute('camera');
+        const pointSize = parseFloat(document.getElementById('pointSize').value); // Get current point size
 
         this.setSlider('posX', pos.x);
         this.setSlider('posY', pos.y);
@@ -352,6 +365,7 @@ AFRAME.registerComponent('projector-controls', {
         this.setSlider('fov', cam.fov);
         this.setSlider('near', cam.near);
         this.setSlider('far', cam.far);
+        this.setSlider('pointSize', pointSize);
     },
 
     setSlider: function(id, value) {
@@ -362,6 +376,7 @@ AFRAME.registerComponent('projector-controls', {
             let precision = 2;
             if (id === 'fov') precision = 0;
             if (id === 'far') precision = 1;
+            if (id === 'pointSize') precision = 3; // Use 3 decimal places for point size
 
             if(valEl) valEl.textContent = parseFloat(value).toFixed(precision);
         }
@@ -384,7 +399,16 @@ AFRAME.registerComponent('projector-controls', {
         };
         this.cameraEl.setAttribute('camera', newCam);
 
-        // --- 3. Update slider value displays ---
+        // --- 3. Update Point Size ---
+        const newPointSize = parseFloat(this.sliders.pointSize.value);
+        globalPointsMeshes.forEach(points => {
+            if (points.material && points.material.isPointsMaterial) {
+                points.material.size = newPointSize;
+                points.material.needsUpdate = true;
+            }
+        });
+
+        // --- 4. Update slider value displays ---
         document.getElementById('valX').textContent = newPos.x.toFixed(2);
         document.getElementById('valY').textContent = newPos.y.toFixed(2);
         document.getElementById('valZ').textContent = newPos.z.toFixed(2);
@@ -392,6 +416,7 @@ AFRAME.registerComponent('projector-controls', {
         document.getElementById('valFov').textContent = newCam.fov.toFixed(0);
         document.getElementById('valNear').textContent = newCam.near.toFixed(2);
         document.getElementById('valFar').textContent = newCam.far.toFixed(1);
+        document.getElementById('valPointSize').textContent = newPointSize.toFixed(3); // Display new point size
     }
 });
 
@@ -414,7 +439,7 @@ document.querySelector('#model').addEventListener('model-loaded', e => {
     const n = new THREE.Vector3();
     const nWorld = new THREE.Vector3();
     const normalMatrix = new THREE.Matrix3();
-    const pointsMeshes = [];
+    const tempMeshes = []; // Use a temporary array for initial mesh data
     let yOffset = 0;
 
     root.traverse(mesh => {
@@ -454,7 +479,7 @@ document.querySelector('#model').addEventListener('model-loaded', e => {
         ctx.drawImage(meshCanvas, 0, yOffset, normalCanvas.width, normalCanvas.height / 9);
         yOffset += normalCanvas.height / 9;
 
-        pointsMeshes.push({geom, mesh});
+        tempMeshes.push({geom, mesh});
         mesh.visible = false;
     });
 
@@ -464,12 +489,14 @@ document.querySelector('#model').addEventListener('model-loaded', e => {
     const hydraTexture = new THREE.CanvasTexture(hydraCanvas);
     // Setting encoding is crucial for color accuracy
     hydraTexture.encoding = THREE.sRGBEncoding;
+    
+    const initialPointSize = parseFloat(document.getElementById('pointSize').value);
 
-    pointsMeshes.forEach(item => {
+    tempMeshes.forEach(item => {
         const points = new THREE.Points(
             item.geom,
             new THREE.PointsMaterial({
-                size: 0.02,
+                size: initialPointSize, // Use initial point size from the slider
                 map: hydraTexture,
                 alphaMap: hydraTexture,
                 transparent: true,
@@ -480,6 +507,9 @@ document.querySelector('#model').addEventListener('model-loaded', e => {
         points.rotation.copy(item.mesh.rotation);
         points.scale.copy(item.mesh.scale);
         item.mesh.parent.add(points);
+        
+        // Store the THREE.Points object globally for dynamic updates
+        globalPointsMeshes.push(points);
     });
 
     AFRAME.registerComponent('update-hydra-texture',{
